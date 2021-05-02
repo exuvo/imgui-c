@@ -937,7 +937,6 @@ static void             EndFrameDrawDimmedBackgrounds();
 
 // Viewports
 const ImGuiID           IMGUI_VIEWPORT_DEFAULT_ID = 0x11111111; // Using an arbitrary constant instead of e.g. ImHashStr("ViewportDefault", 0); so it's easier to spot in the debugger. The exact value doesn't matter.
-ImGuiViewportP*  AddUpdateViewport(ImGuiWindow* window, ImGuiID id, const ImVec2& platform_pos, const ImVec2& size, ImGuiViewportFlags flags);
 static void             UpdateViewportsNewFrame();
 static void             UpdateViewportsEndFrame();
 static void             UpdateSelectWindowViewport(ImGuiWindow* window);
@@ -11546,7 +11545,7 @@ static void ImGui::UpdateViewportsNewFrame()
         viewport->Idx = n;
 
         // Erase unused viewports
-        if (n > 0 && viewport->LastFrameActive < g.FrameCount - 2)
+        if ((viewport->Flags & ImGuiViewportFlags_OwnedByApp) == 0 && viewport->LastFrameActive < g.FrameCount - 2)
         {
             // Clear references to this viewport in windows (window->ViewportId becomes the master data)
             for (int window_n = 0; window_n < g.Windows.Size; window_n++)
@@ -11701,14 +11700,14 @@ static void ImGui::UpdateViewportsEndFrame()
         viewport->LastPos = viewport->Pos;
         
         if (viewport->LastFrameActive < g.FrameCount || viewport->Size.x <= 0.0f || viewport->Size.y <= 0.0f) {
-        	if ((viewport->Flags & (ImGuiViewportFlags_OwnedByApp | ImGuiViewportFlags_CanHostOtherWindows)) == 0)
+        	if ((viewport->Flags & ImGuiViewportFlags_OwnedByApp) == 0)
         		continue;
         }
         
         if (viewport->Window && !IsWindowActiveAndVisible(viewport->Window))
             continue;
         
-        if ((viewport->Flags & (ImGuiViewportFlags_OwnedByApp | ImGuiViewportFlags_CanHostOtherWindows)) == 0) {
+        if ((viewport->Flags & ImGuiViewportFlags_OwnedByApp) == 0) {
         	IM_ASSERT(viewport->Window != NULL);
         }
         
@@ -11778,6 +11777,52 @@ ImGuiViewportP* ImGui::AddUpdateViewport(ImGuiWindow* window, ImGuiID id, const 
         window->ViewportOwned = true;
 
     return viewport;
+}
+
+void ImGui::EraseViewport(ImGuiViewportP* viewport) {
+	IM_ASSERT(viewport != NULL);
+	ImGuiContext& g = *GImGui;
+	IM_ASSERT(g.PlatformIO.Viewports.Size <= g.Viewports.Size);
+	
+	// Clear references to this viewport in windows (window->ViewportId becomes the master data)
+	for (int window_n = 0; window_n < g.Windows.Size; window_n++)
+			if (g.Windows[window_n]->Viewport == viewport)
+			{
+					g.Windows[window_n]->Viewport = (ImGuiViewportP*) GetMainViewport();
+//					g.Windows[window_n]->ViewportOwned = false;
+			}
+	
+	if (viewport == g.MouseLastHoveredViewport)
+			g.MouseLastHoveredViewport = NULL;
+	
+	int n=-1;
+	for (int i = 0; i < g.Viewports.Size; i++) {
+		if (g.Viewports[i] == viewport) {
+			n = i;
+			break;
+		}
+	}
+	
+	IM_ASSERT(n >= 0);
+	
+	g.Viewports.erase(g.Viewports.Data + n);
+
+	// Destroy
+	IMGUI_DEBUG_LOG_VIEWPORT("Delete Viewport %08X (%s)\n", viewport->ID, viewport->Window ? viewport->Window->Name : "n/a");
+	DestroyPlatformWindow(viewport);
+	
+	n=-1;
+	for (int i = 0; i < g.PlatformIO.Viewports.Size; i++) {
+		if (g.PlatformIO.Viewports[i] == viewport) {
+			n = i;
+			break;
+		}
+	}
+	
+	IM_ASSERT(n >= 0);
+	g.PlatformIO.Viewports.erase(g.PlatformIO.Viewports.Data + n);
+	
+	IM_DELETE(viewport);
 }
 
 // FIXME-VIEWPORT: This is all super messy and ought to be clarified or rewritten.
