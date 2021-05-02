@@ -937,7 +937,7 @@ static void             EndFrameDrawDimmedBackgrounds();
 
 // Viewports
 const ImGuiID           IMGUI_VIEWPORT_DEFAULT_ID = 0x11111111; // Using an arbitrary constant instead of e.g. ImHashStr("ViewportDefault", 0); so it's easier to spot in the debugger. The exact value doesn't matter.
-static ImGuiViewportP*  AddUpdateViewport(ImGuiWindow* window, ImGuiID id, const ImVec2& platform_pos, const ImVec2& size, ImGuiViewportFlags flags);
+ImGuiViewportP*  AddUpdateViewport(ImGuiWindow* window, ImGuiID id, const ImVec2& platform_pos, const ImVec2& size, ImGuiViewportFlags flags);
 static void             UpdateViewportsNewFrame();
 static void             UpdateViewportsEndFrame();
 static void             UpdateSelectWindowViewport(ImGuiWindow* window);
@@ -3491,11 +3491,15 @@ ImGuiPlatformIO& ImGui::GetPlatformIO()
 }
 
 // Pass this to your backend rendering function! Valid after Render() and until the next call to NewFrame()
-ImDrawData* ImGui::GetDrawData()
+ImDrawData* ImGui::GetDrawData(ImGuiViewport* viewport)
 {
-    ImGuiContext& g = *GImGui;
-    ImGuiViewportP* viewport = g.Viewports[0];
-    return viewport->DrawDataP.Valid ? &viewport->DrawDataP : NULL;
+	IM_ASSERT(viewport != NULL);
+	ImGuiViewportP* viewportP = (ImGuiViewportP*) viewport;
+	return viewportP->DrawDataP.Valid ? &viewportP->DrawDataP : NULL;
+}
+
+ImDrawData* ImGui::GetDrawData() {
+	return GetDrawData(ImGui::GetMainViewport());
 }
 
 double ImGui::GetTime()
@@ -11427,8 +11431,17 @@ static bool ImGui::UpdateTryMergeWindowIntoHostViewport(ImGuiWindow* window, ImG
 // FIXME: handle 0 to N host viewports
 static bool ImGui::UpdateTryMergeWindowIntoHostViewports(ImGuiWindow* window)
 {
-    ImGuiContext& g = *GImGui;
-    return UpdateTryMergeWindowIntoHostViewport(window, g.Viewports[0]);
+	ImGuiContext& g = *GImGui;
+	
+	for (ImGuiViewportP* viewport : g.Viewports) {
+		if (viewport->Flags & ImGuiViewportFlags_CanHostOtherWindows) {
+			if (UpdateTryMergeWindowIntoHostViewport(window, viewport)) {
+				return true;
+			}
+		}
+	}
+	
+	return false;
 }
 
 // Translate Dear ImGui windows when a Host Viewport has been moved
@@ -11686,13 +11699,19 @@ static void ImGui::UpdateViewportsEndFrame()
     {
         ImGuiViewportP* viewport = g.Viewports[i];
         viewport->LastPos = viewport->Pos;
-        if (viewport->LastFrameActive < g.FrameCount || viewport->Size.x <= 0.0f || viewport->Size.y <= 0.0f)
-            if (i > 0) // Always include main viewport in the list
-                continue;
+        
+        if (viewport->LastFrameActive < g.FrameCount || viewport->Size.x <= 0.0f || viewport->Size.y <= 0.0f) {
+        	if ((viewport->Flags & (ImGuiViewportFlags_OwnedByApp | ImGuiViewportFlags_CanHostOtherWindows)) == 0)
+        		continue;
+        }
+        
         if (viewport->Window && !IsWindowActiveAndVisible(viewport->Window))
             continue;
-        if (i > 0)
-            IM_ASSERT(viewport->Window != NULL);
+        
+        if ((viewport->Flags & (ImGuiViewportFlags_OwnedByApp | ImGuiViewportFlags_CanHostOtherWindows)) == 0) {
+        	IM_ASSERT(viewport->Window != NULL);
+        }
+        
         g.PlatformIO.Viewports.push_back(viewport);
     }
     g.Viewports[0]->ClearRequestFlags(); // Clear main viewport flags because UpdatePlatformWindows() won't do it and may not even be called
@@ -11905,6 +11924,10 @@ void ImGui::UpdatePlatformWindows()
     for (int i = 1; i < g.Viewports.Size; i++)
     {
         ImGuiViewportP* viewport = g.Viewports[i];
+        
+        if (viewport->Flags & ImGuiViewportFlags_OwnedByApp) { // Avoid Create and destroy window for host windows viewports
+            continue;
+        }
 
         // Destroy platform window if the viewport hasn't been submitted or if it is hosting a hidden window
         // (the implicit/fallback Debug##Default window will be registering its viewport then be disabled, causing a dummy DestroyPlatformWindow to be made each frame)
@@ -12029,11 +12052,12 @@ void ImGui::UpdatePlatformWindows()
 //
 void ImGui::RenderPlatformWindowsDefault(void* platform_render_arg, void* renderer_render_arg)
 {
-    // Skip the main viewport (index 0), which is always fully handled by the application!
     ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
     for (int i = 1; i < platform_io.Viewports.Size; i++)
     {
         ImGuiViewport* viewport = platform_io.Viewports[i];
+        if (viewport->Flags & ImGuiViewportFlags_OwnedByApp)
+            continue;
         if (viewport->Flags & ImGuiViewportFlags_Minimized)
             continue;
         if (platform_io.Platform_RenderWindow) platform_io.Platform_RenderWindow(viewport, platform_render_arg);
@@ -12042,6 +12066,8 @@ void ImGui::RenderPlatformWindowsDefault(void* platform_render_arg, void* render
     for (int i = 1; i < platform_io.Viewports.Size; i++)
     {
         ImGuiViewport* viewport = platform_io.Viewports[i];
+        if (viewport->Flags & ImGuiViewportFlags_OwnedByApp)
+            continue;
         if (viewport->Flags & ImGuiViewportFlags_Minimized)
             continue;
         if (platform_io.Platform_SwapBuffers) platform_io.Platform_SwapBuffers(viewport, platform_render_arg);
@@ -12130,7 +12156,8 @@ void ImGui::DestroyPlatformWindow(ImGuiViewportP* viewport)
     }
     else
     {
-        IM_ASSERT(viewport->RendererUserData == NULL && viewport->PlatformUserData == NULL && viewport->PlatformHandle == NULL);
+        if ((viewport->Flags & ImGuiViewportFlags_OwnedByApp) == 0)
+            IM_ASSERT(viewport->RendererUserData == NULL && viewport->PlatformUserData == NULL && viewport->PlatformHandle == NULL);
     }
     viewport->RendererUserData = viewport->PlatformUserData = viewport->PlatformHandle = NULL;
     viewport->ClearRequestFlags();

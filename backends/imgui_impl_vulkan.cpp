@@ -1025,14 +1025,24 @@ bool    ImGui_ImplVulkan_Init(ImGui_ImplVulkan_InitInfo* info, VkRenderPass rend
 
     ImGui_ImplVulkan_CreateDeviceObjects();
 
-    // Our render function expect RendererUserData to be storing the window render buffer we need (for the main viewport we won't use ->Window)
-    ImGuiViewport* main_viewport = ImGui::GetMainViewport();
-    main_viewport->RendererUserData = IM_NEW(ImGuiViewportDataVulkan)();
+    ImGui_ImplVulkan_InitViewport(ImGui::GetMainViewport());
 
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
         ImGui_ImplVulkan_InitPlatformInterface();
 
     return true;
+}
+
+void ImGui_ImplVulkan_InitViewport(ImGuiViewport* viewport) {
+	// Our render function expect RendererUserData to be storing the window render buffer we need (for the main viewport we won't use ->Window)
+	viewport->RendererUserData = IM_NEW(ImGuiViewportDataVulkan)();
+}
+
+void ImGui_ImplVulkan_ShutdownViewport(ImGuiViewport* viewport) {
+	if (ImGuiViewportDataVulkan* data = (ImGuiViewportDataVulkan*)viewport->RendererUserData) {
+		IM_DELETE(data);
+		viewport->RendererUserData = NULL;
+	}
 }
 
 void ImGui_ImplVulkan_Shutdown()
