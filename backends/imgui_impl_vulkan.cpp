@@ -1040,6 +1040,10 @@ void ImGui_ImplVulkan_InitViewport(ImGuiViewport* viewport) {
 
 void ImGui_ImplVulkan_ShutdownViewport(ImGuiViewport* viewport) {
 	if (ImGuiViewportDataVulkan* data = (ImGuiViewportDataVulkan*)viewport->RendererUserData) {
+		
+		ImGui_ImplVulkan_InitInfo* v = &g_VulkanInitInfo;
+		ImGui_ImplVulkanH_DestroyWindowRenderBuffers(v->Device, &data->RenderBuffers, v->Allocator);
+		
 		IM_DELETE(data);
 		viewport->RendererUserData = NULL;
 	}
@@ -1224,7 +1228,7 @@ int ImGui_ImplVulkanH_GetMinImageCountFromPresentMode(VkPresentModeKHR present_m
 }
 
 // Also destroy old swap chain and in-flight frames data, if any.
-void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, VkDevice device, ImGui_ImplVulkanH_Window* wd, const VkAllocationCallbacks* allocator, int w, int h, uint32_t min_image_count)
+void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, VkDevice device, ImGui_ImplVulkanH_Window* wd, const VkAllocationCallbacks* allocator, int w, int h, uint32_t min_image_count, VkSampleCountFlagBits MSAASamples)
 {
     VkResult err;
     VkSwapchainKHR old_swapchain = wd->Swapchain;
@@ -1312,7 +1316,7 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
     {
         VkAttachmentDescription attachment = {};
         attachment.format = wd->SurfaceFormat.format;
-        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        attachment.samples = MSAASamples;
         attachment.loadOp = wd->ClearEnable ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1346,7 +1350,7 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
 
         // We do not create a pipeline by default as this is also used by examples' main.cpp,
         // but secondary viewport in multi-viewport mode may want to create one with:
-        //ImGui_ImplVulkan_CreatePipeline(device, allocator, VK_NULL_HANDLE, wd->RenderPass, VK_SAMPLE_COUNT_1_BIT, &wd->Pipeline, g_Subpass);
+        ImGui_ImplVulkan_CreatePipeline(device, allocator, VK_NULL_HANDLE, wd->RenderPass, MSAASamples, &wd->Pipeline, g_Subpass);
     }
 
     // Create The Image Views
@@ -1369,6 +1373,8 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
             check_vk_result(err);
         }
     }
+    
+    //TODO create images for additional framebuffer attachment for multisampling
 
     // Create Framebuffer
     {
@@ -1392,11 +1398,11 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
 }
 
 // Create or resize window
-void ImGui_ImplVulkanH_CreateOrResizeWindow(VkInstance instance, VkPhysicalDevice physical_device, VkDevice device, ImGui_ImplVulkanH_Window* wd, uint32_t queue_family, const VkAllocationCallbacks* allocator, int width, int height, uint32_t min_image_count)
+void ImGui_ImplVulkanH_CreateOrResizeWindow(VkInstance instance, VkPhysicalDevice physical_device, VkDevice device, ImGui_ImplVulkanH_Window* wd, uint32_t queue_family, const VkAllocationCallbacks* allocator, int width, int height, uint32_t min_image_count, VkSampleCountFlagBits MSAASamples)
 {
     IM_ASSERT(g_FunctionsLoaded && "Need to call ImGui_ImplVulkan_LoadFunctions() if IMGUI_IMPL_VULKAN_NO_PROTOTYPES or VK_NO_PROTOTYPES are set!");
     (void)instance;
-    ImGui_ImplVulkanH_CreateWindowSwapChain(physical_device, device, wd, allocator, width, height, min_image_count);
+    ImGui_ImplVulkanH_CreateWindowSwapChain(physical_device, device, wd, allocator, width, height, min_image_count, VK_SAMPLE_COUNT_1_BIT); //TODO MSAASamples
     //ImGui_ImplVulkan_CreatePipeline(device, allocator, VK_NULL_HANDLE, wd->RenderPass, VK_SAMPLE_COUNT_1_BIT, &wd->Pipeline, g_VulkanInitInfo.Subpass);
     ImGui_ImplVulkanH_CreateWindowCommandBuffers(physical_device, device, wd, queue_family, allocator);
 }
@@ -1511,7 +1517,7 @@ static void ImGui_ImplVulkan_CreateWindow(ImGuiViewport* viewport)
 
     // Create SwapChain, RenderPass, Framebuffer, etc.
     wd->ClearEnable = (viewport->Flags & ImGuiViewportFlags_NoRendererClear) ? false : true;
-    ImGui_ImplVulkanH_CreateOrResizeWindow(v->Instance, v->PhysicalDevice, v->Device, wd, v->QueueFamily, v->Allocator, (int)viewport->Size.x, (int)viewport->Size.y, v->MinImageCount);
+    ImGui_ImplVulkanH_CreateOrResizeWindow(v->Instance, v->PhysicalDevice, v->Device, wd, v->QueueFamily, v->Allocator, (int)viewport->Size.x, (int)viewport->Size.y, v->MinImageCount, v->MSAASamples);
     data->WindowOwned = true;
 }
 
@@ -1535,7 +1541,7 @@ static void ImGui_ImplVulkan_SetWindowSize(ImGuiViewport* viewport, ImVec2 size)
         return;
     ImGui_ImplVulkan_InitInfo* v = &g_VulkanInitInfo;
     data->Window.ClearEnable = (viewport->Flags & ImGuiViewportFlags_NoRendererClear) ? false : true;
-    ImGui_ImplVulkanH_CreateOrResizeWindow(v->Instance, v->PhysicalDevice, v->Device, &data->Window, v->QueueFamily, v->Allocator, (int)size.x, (int)size.y, v->MinImageCount);
+    ImGui_ImplVulkanH_CreateOrResizeWindow(v->Instance, v->PhysicalDevice, v->Device, &data->Window, v->QueueFamily, v->Allocator, (int)size.x, (int)size.y, v->MinImageCount, v->MSAASamples);
 }
 
 static void ImGui_ImplVulkan_RenderWindow(ImGuiViewport* viewport, void*)
@@ -1631,7 +1637,7 @@ static void ImGui_ImplVulkan_SwapBuffers(ImGuiViewport* viewport, void*)
     info.pImageIndices = &present_index;
     err = vkQueuePresentKHR(v->Queue, &info);
     if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR)
-        ImGui_ImplVulkanH_CreateOrResizeWindow(v->Instance, v->PhysicalDevice, v->Device, &data->Window, v->QueueFamily, v->Allocator, (int)viewport->Size.x, (int)viewport->Size.y, v->MinImageCount);
+        ImGui_ImplVulkanH_CreateOrResizeWindow(v->Instance, v->PhysicalDevice, v->Device, &data->Window, v->QueueFamily, v->Allocator, (int)viewport->Size.x, (int)viewport->Size.y, v->MinImageCount, v->MSAASamples);
     else
         check_vk_result(err);
 
